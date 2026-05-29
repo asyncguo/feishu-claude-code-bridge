@@ -6,6 +6,7 @@ import type {
 } from '@larksuiteoapi/node-sdk';
 import { Domain, LoggerLevel, createLarkChannel } from '@larksuiteoapi/node-sdk';
 import type { AgentAdapter } from '../agent/types';
+import type { AgentStore } from './agent-store';
 import { handleCardAction } from '../card/dispatcher';
 import { renderCard } from '../card/run-renderer';
 import {
@@ -113,13 +114,14 @@ export interface BridgeChannel {
 export interface StartChannelDeps {
   cfg: AppConfig;
   agent: AgentAdapter;
+  agentStore: AgentStore;
   sessions: SessionStore;
   workspaces: WorkspaceStore;
   controls: Controls;
 }
 
 export async function startChannel(deps: StartChannelDeps): Promise<BridgeChannel> {
-  const { cfg, agent, sessions, workspaces, controls } = deps;
+  const { cfg, agent, agentStore, sessions, workspaces, controls } = deps;
   const activeRuns = new ActiveRuns();
   // ChatModeCache stays per-bridge-instance — invalidated on restart along
   // with everything else. Topic-mode chats only need one chat.get() call ever.
@@ -195,6 +197,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
         await runAgentBatch({
           channel,
           agent,
+          agentStore,
           sessions,
           workspaces,
           activeRuns,
@@ -223,6 +226,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
         intakeMessage({
           channel,
           agent,
+          agentStore,
           sessions,
           workspaces,
           activeRuns,
@@ -245,6 +249,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
           workspaces,
           activeRuns,
           agent,
+          agentStore,
           controls,
           pending,
           chatModeCache,
@@ -253,7 +258,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     },
     comment: async (evt) => {
       await withTrace({ chatId: 'comment' }, async () => {
-        await handleCommentMention({ channel, evt, agent, sessions, workspaces }).catch((err) =>
+        await handleCommentMention({ channel, evt, agent, agentStore, sessions, workspaces }).catch((err) =>
           log.fail('comment', err),
         );
       }).catch((err) => log.fail('comment', err));
@@ -399,6 +404,7 @@ function startAccessRefreshTimer(
 interface IntakeDeps {
   channel: LarkChannel;
   agent: AgentAdapter;
+  agentStore: AgentStore;
   sessions: SessionStore;
   workspaces: WorkspaceStore;
   activeRuns: ActiveRuns;
@@ -412,6 +418,7 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
   const {
     channel,
     agent,
+    agentStore,
     sessions,
     workspaces,
     activeRuns,
@@ -493,6 +500,7 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
     sessions,
     workspaces,
     agent,
+    agentStore,
     activeRuns,
     controls,
   });
@@ -509,6 +517,7 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
 interface RunBatchDeps {
   channel: LarkChannel;
   agent: AgentAdapter;
+  agentStore: AgentStore;
   sessions: SessionStore;
   workspaces: WorkspaceStore;
   activeRuns: ActiveRuns;
@@ -523,6 +532,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   const {
     channel,
     agent,
+    agentStore,
     sessions,
     workspaces,
     activeRuns,
@@ -537,6 +547,9 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   const lastMsg = batch[batch.length - 1];
   if (!firstMsg || !lastMsg) return;
 
+  // Resolve the effective agent for this scope — may differ from the global
+  // default if the user set a per-scope preference via /agent.
+  const scopeAgent = agentStore.resolve(scope);
   const chatId = firstMsg.chatId;
   const threadId = firstMsg.threadId;
 
@@ -576,7 +589,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   log.info('prompt', 'built', { promptChars: prompt.length, quotes: quotes.length });
 
   const cwd = workspaces.cwdFor(scope) ?? homedir();
-  const resumeFrom = sessions.resumeFor(scope, cwd, agent.id);
+  const resumeFrom = sessions.resumeFor(scope, cwd, scopeAgent.id);
   if (resumeFrom) {
     log.info('session', 'resume', { sessionId: resumeFrom, cwd });
   } else {
@@ -589,7 +602,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     }
   }
 
-  const run = agent.run({
+  const run = scopeAgent.run({
     prompt,
     sessionId: resumeFrom,
     cwd,
@@ -644,7 +657,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           card: {
             initial: renderCard(initialState),
             producer: async (ctrl) => {
-              await processAgentStream(handle, sessions, scope, cwd, agent.id, idleTimeoutMs, async (state) => {
+              await processAgentStream(handle, sessions, scope, cwd, scopeAgent.id, idleTimeoutMs, async (state) => {
                 await ctrl.update(renderCard(filterForPrefs(state)));
               });
             },
@@ -657,7 +670,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         chatId,
         {
           markdown: async (ctrl) => {
-            await processAgentStream(handle, sessions, scope, cwd, agent.id, idleTimeoutMs, async (state) => {
+            await processAgentStream(handle, sessions, scope, cwd, scopeAgent.id, idleTimeoutMs, async (state) => {
               await ctrl.setContent(renderText(filterForPrefs(state)));
             });
           },
@@ -669,7 +682,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
       // the run, then post the final rendered text once as a plain markdown
       // (msg_type=post) message — no card, no streaming, no typewriter.
       let finalState: RunState = initialState;
-      await processAgentStream(handle, sessions, scope, cwd, agent.id, idleTimeoutMs, async (state) => {
+      await processAgentStream(handle, sessions, scope, cwd, scopeAgent.id, idleTimeoutMs, async (state) => {
         finalState = state;
       });
       const body = renderText(filterForPrefs(finalState));

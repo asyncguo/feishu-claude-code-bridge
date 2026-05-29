@@ -2,8 +2,9 @@ import dns from 'node:dns';
 import os from 'node:os';
 import { createInterface } from 'node:readline';
 import pkg from '../../../package.json';
-import { resolveAgent } from '../../agent';
+import { createAllAdapters, resolveAgent } from '../../agent';
 import type { AgentId } from '../../agent/types';
+import { AgentStore } from '../../bot/agent-store';
 import { startChannel, type BridgeChannel } from '../../bot/channel';
 import { runRegistrationWizard } from '../../bot/wizard';
 import type { Controls } from '../../commands';
@@ -107,6 +108,11 @@ export async function runStart(opts: StartOptions): Promise<void> {
     process.exit(1);
   }
 
+  // Pre-create all available adapters for per-scope agent switching via /agent.
+  // Adapter instances are cheap — they only hold binary paths/config.
+  const availableAdapters = await getAvailableAdapters();
+  const agentStore = new AgentStore(availableAdapters, agent);
+
   const sessions = new SessionStore();
   await sessions.load();
   const workspaces = new WorkspaceStore();
@@ -171,6 +177,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
     cfg,
     processId: entry.id,
     knownChats: [],
+    agentStore,
     // botOwnerId is filled in by channel.ts once the WS handshake + the
     // application/v6 API call complete. Until then it stays undefined and
     // access control behaves fail-secure (no creator bypass).
@@ -183,6 +190,13 @@ export async function runStart(opts: StartOptions): Promise<void> {
       try {
         const next = await loadConfig(configPath);
         if (!isComplete(next)) throw new Error('config incomplete after change');
+        const nextAgent = pickAgent(opts.agent ?? (next.preferences?.agent as AgentId | undefined));
+        if (!(await nextAgent.isAvailable())) {
+          throw new Error(`未找到 ${nextAgent.id} CLI。请先安装 ${nextAgent.displayName}。`);
+        }
+        const nextAvailableAdapters = await getAvailableAdapters();
+        agentStore.replaceAdapters(nextAvailableAdapters);
+        agentStore.setDefaultAgent(nextAgent);
         console.log(
           `[restart] connecting new bridge with appId=${next.accounts.app.id} tenant=${next.accounts.app.tenant}...`,
         );
@@ -195,7 +209,8 @@ export async function runStart(opts: StartOptions): Promise<void> {
         // someone manually restarts it.
         const next_bridge = await startChannel({
           cfg: next,
-          agent,
+          agent: nextAgent,
+          agentStore,
           sessions,
           workspaces,
           controls,
@@ -225,7 +240,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
     },
   };
 
-  bridge = await startChannel({ cfg, agent, sessions, workspaces, controls });
+  bridge = await startChannel({ cfg, agent, agentStore, sessions, workspaces, controls });
 
   // Backfill the bot's display name into the registry once WS handshake is
   // done — future starts conflicting on this app can show it in the prompt
@@ -263,6 +278,15 @@ function pickAgent(pref: AgentId | undefined) {
     console.log('使用 Pi Coding Agent 作为 agent 后端。');
   }
   return resolveAgent(pref);
+}
+
+async function getAvailableAdapters() {
+  const adapters = createAllAdapters();
+  const available = [];
+  for (const adapter of adapters) {
+    if (await adapter.isAvailable()) available.push(adapter);
+  }
+  return available;
 }
 
 /**
@@ -418,4 +442,3 @@ async function persistEncrypted(cfg: AppConfig, configPath: string): Promise<App
   await saveConfig(next, configPath);
   return next;
 }
-

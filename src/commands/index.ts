@@ -1,7 +1,8 @@
 import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import type { LarkChannel, NormalizedMessage } from '@larksuiteoapi/node-sdk';
-import type { AgentAdapter } from '../agent/types';
+import type { AgentAdapter, AgentId } from '../agent/types';
+import type { AgentStore } from '../bot/agent-store';
 import type { ActiveRuns } from '../bot/active-runs';
 import {
   accountCurrentCard,
@@ -76,6 +77,9 @@ export interface Controls {
    * this cache (e.g. when the cache was truncated at 500).
    */
   knownChats: KnownChat[];
+  /** Per-scope agent preference store. Lets users switch agent backends
+   * per chat / topic via /agent command. */
+  agentStore: AgentStore;
 }
 
 export interface CommandContext {
@@ -97,6 +101,8 @@ export interface CommandContext {
   agent: AgentAdapter;
   activeRuns: ActiveRuns;
   controls: Controls;
+  /** Per-scope agent store for resolving the effective agent. */
+  agentStore: AgentStore;
   /** Set when invoked from a CardKit 2.0 form submit. Keys are input `name`s. */
   formValue?: Record<string, unknown>;
   /** True when this invocation came from a card button click rather than a
@@ -125,6 +131,7 @@ const handlers: Record<string, Handler> = {
   '/reconnect': handleReconnect,
   '/invite': handleInvite,
   '/remove': handleRemove,
+  '/agent': handleAgent,
 };
 
 /**
@@ -143,6 +150,7 @@ const ADMIN_COMMANDS = new Set([
   '/ws',
   '/invite',
   '/remove',
+  '/agent',
 ]);
 
 function isAdminCommand(cmd: string): boolean {
@@ -400,8 +408,9 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
 
 async function applyResume(sessionId: string, ctx: CommandContext): Promise<void> {
   const cwd = ctx.workspaces.cwdFor(ctx.scope) ?? homedir();
+  const scopeAgent = ctx.agentStore.resolve(ctx.scope);
   ctx.activeRuns.interrupt(ctx.scope);
-  ctx.sessions.set(ctx.scope, sessionId, cwd, ctx.agent.id);
+  ctx.sessions.set(ctx.scope, sessionId, cwd, scopeAgent.id);
   await reply(
     ctx,
     `✓ 已恢复会话 \`${sessionId.slice(0, 8)}…\`。接着发消息就行。`,
@@ -411,11 +420,12 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
 async function handleStatus(_args: string, ctx: CommandContext): Promise<void> {
   const cwd = ctx.workspaces.cwdFor(ctx.scope) ?? homedir();
   const sess = ctx.sessions.getRaw(ctx.scope);
+  const scopeAgent = ctx.agentStore.resolve(ctx.scope);
   const card = statusCard({
     cwd,
     sessionId: sess?.sessionId,
     sessionStale: Boolean(sess && sess.cwd !== cwd),
-    agentName: ctx.agent.displayName,
+    agentName: scopeAgent.displayName,
     scope: ctx.scope,
     chatMode: ctx.chatMode,
   });
@@ -567,6 +577,80 @@ function formatAgo(ms: number): string {
   return `${Math.floor(ms / 86_400_000)}d 前`;
 }
 
+// ─── /agent — per-scope agent switching ───────────────────────────────────
+
+async function handleAgent(args: string, ctx: CommandContext): Promise<void> {
+  const target = args.trim().toLowerCase();
+  const availableIds = ctx.agentStore.listIds();
+  const currentId = ctx.agentStore.getId(ctx.scope);
+  const defaultAgent = ctx.agentStore.defaultAgent;
+  const effectiveId = currentId ?? defaultAgent.id;
+
+  if (availableIds.length === 0) {
+    await reply(ctx, '❌ 当前没有可用的 agent 后端。先安装至少一个 CLI。');
+    return;
+  }
+
+  if (!target) {
+    // Show current agent + available options
+    const lines: string[] = [];
+    const currentLabel = currentId
+      ? `${ctx.agentStore.getById(effectiveId as AgentId)?.displayName ?? effectiveId} (\`${effectiveId}\`)`
+      : `${defaultAgent.displayName} (\`${defaultAgent.id}\`，全局默认)`;
+    lines.push(`🤖 当前 agent：**${currentLabel}**`);
+    lines.push('');
+    lines.push('可用 agent：');
+    for (const id of availableIds) {
+      const adapter = ctx.agentStore.getById(id);
+      const marker = id === effectiveId ? ' ← 当前' : '';
+      if (adapter) {
+        lines.push(`- \`${id}\` — ${adapter.displayName}${marker}`);
+      }
+    }
+    lines.push('');
+    lines.push(`切换：\`/agent ${availableIds.join(' | ')} | default\``);
+    await reply(ctx, lines.join('\n'));
+    return;
+  }
+
+  if (target === 'default') {
+    const cleared = ctx.agentStore.clear(ctx.scope);
+    if (cleared) {
+      ctx.activeRuns.interrupt(ctx.scope);
+      ctx.sessions.clear(ctx.scope);
+      await reply(
+        ctx,
+        `✅ 已恢复全局默认 agent（${defaultAgent.displayName}， \`${defaultAgent.id}\`）\n（session 已重置）`,
+      );
+    } else {
+      await reply(ctx, `当前已经在用全局默认 agent（${defaultAgent.displayName}）。`);
+    }
+    return;
+  }
+
+  if (!availableIds.includes(target as AgentId)) {
+    await reply(
+      ctx,
+      `❌ 不支持的 agent：\`${target}\`。可用：${availableIds.map((id) => `\`${id}\``).join('、')}`,
+    );
+    return;
+  }
+
+  const adapter = ctx.agentStore.getById(target as AgentId);
+  if (!adapter) {
+    await reply(ctx, `❌ agent \`${target}\` 未注册。`);
+    return;
+  }
+
+  ctx.agentStore.set(ctx.scope, target as AgentId);
+  ctx.activeRuns.interrupt(ctx.scope);
+  ctx.sessions.clear(ctx.scope);
+  await reply(
+    ctx,
+    `✅ 已切换到 **${adapter.displayName}**（\`${adapter.id}\`）\n（session 已重置）`,
+  );
+}
+
 async function handleReconnect(_args: string, ctx: CommandContext): Promise<void> {
   log.info('command', 'reconnect');
   await reply(ctx, '⏳ 正在重连…');
@@ -651,7 +735,8 @@ async function handleDoctor(args: string, ctx: CommandContext): Promise<void> {
   }
 
   const prompt = buildDoctorPrompt(args, logs);
-  const run = ctx.agent.run({
+  const scopeAgent = ctx.agentStore.resolve(ctx.scope);
+  const run = scopeAgent.run({
     prompt,
     cwd: homedir(),
     stopGraceMs: getAgentStopGraceMs(ctx.controls.cfg),

@@ -15,3 +15,8 @@ export function resolveAgent(pref: AgentId | undefined): AgentAdapter {
   if (pref === 'pi') return new PiAdapter();
   return new ClaudeAdapter();
 }
+
+/** Create all known agent adapters (for AgentStore pre-registration). */
+export function createAllAdapters(): AgentAdapter[] {
+  return [new ClaudeAdapter(), new CodexAdapter(), new PiAdapter()];
+}
