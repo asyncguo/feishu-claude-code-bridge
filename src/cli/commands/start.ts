@@ -3,6 +3,8 @@ import os from 'node:os';
 import { createInterface } from 'node:readline';
 import pkg from '../../../package.json';
 import { ClaudeAdapter } from '../../agent/claude/adapter';
+import { CodexAdapter } from '../../agent/codex/adapter';
+import type { AgentAdapter } from '../../agent/types';
 import { startChannel, type BridgeChannel } from '../../bot/channel';
 import { runRegistrationWizard } from '../../bot/wizard';
 import type { Controls } from '../../commands';
@@ -56,6 +58,8 @@ const MEDIA_GC_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 export interface StartOptions {
   config?: string;
   skipCheckLarkCli?: boolean;
+  /** Agent backend: 'claude' (default) | 'codex'. Also settable via config preferences.agent. */
+  agent?: 'claude' | 'codex';
 }
 
 export async function runStart(opts: StartOptions): Promise<void> {
@@ -90,10 +94,15 @@ export async function runStart(opts: StartOptions): Promise<void> {
     hostname: os.hostname(),
   });
 
-  const agent = new ClaudeAdapter();
+  const agent = resolveAgent(opts.agent ?? (cfg.preferences?.agent as 'claude' | 'codex' | undefined));
   if (!(await agent.isAvailable())) {
-    console.error('✗ 未找到 claude CLI。请先安装 Claude Code：');
-    console.error('  https://docs.anthropic.com/en/docs/claude-code/quickstart');
+    const label = agent.displayName;
+    console.error(`✗ 未找到 ${agent.id} CLI。请先安装 ${label}。`);
+    if (agent.id === 'claude') {
+      console.error('  https://docs.anthropic.com/en/docs/claude-code/quickstart');
+    } else {
+      console.error('  https://github.com/openai/codex');
+    }
     process.exit(1);
   }
 
@@ -244,6 +253,14 @@ export async function runStart(opts: StartOptions): Promise<void> {
 
   // keep the event loop alive until a signal arrives
   await new Promise<void>(() => {});
+}
+
+function resolveAgent(pref: 'claude' | 'codex' | undefined): AgentAdapter {
+  if (pref === 'codex') {
+    console.log('使用 Codex CLI 作为 agent 后端。');
+    return new CodexAdapter();
+  }
+  return new ClaudeAdapter();
 }
 
 /**

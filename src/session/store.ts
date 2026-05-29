@@ -9,6 +9,9 @@ export interface SessionEntry {
   sessionId?: string;
   /** Pinned cwd for the resumable session. Absent for the same reason. */
   cwd?: string;
+  /** Which agent created this session. Resume is skipped if the current
+   * agent differs (Claude sessions can't be resumed by Codex and vice versa). */
+  agent?: string;
   updatedAt: number;
   /** Per-scope idle-timeout override (minutes). 0 = explicitly off for this
    * scope, undefined = follow global default. /new clears the whole entry,
@@ -34,13 +37,9 @@ export class SessionStore {
       this.data = {};
       for (const [chatId, entry] of Object.entries(raw)) {
         if (!entry || typeof entry.updatedAt !== 'number') continue;
-        // Drop entries without a `cwd`/`sessionId` pair *unless* there's
-        // some other persisted state worth keeping (e.g. an idle-timeout
-        // override). Resuming a session whose cwd we don't know about
-        // would hang claude on a missing jsonl, so resume keys still need
-        // the full pair; but a bare timeout override is fine on its own.
         const sessionId = typeof entry.sessionId === 'string' ? entry.sessionId : undefined;
         const cwd = typeof entry.cwd === 'string' ? entry.cwd : undefined;
+        const agent = typeof entry.agent === 'string' ? entry.agent : undefined;
         const idleTimeoutMinutes =
           typeof entry.idleTimeoutMinutes === 'number' ? entry.idleTimeoutMinutes : undefined;
         const hasSession = sessionId !== undefined && cwd !== undefined;
@@ -48,6 +47,7 @@ export class SessionStore {
         this.data[chatId] = {
           ...(sessionId !== undefined ? { sessionId } : {}),
           ...(cwd !== undefined ? { cwd } : {}),
+          ...(agent !== undefined ? { agent } : {}),
           updatedAt: entry.updatedAt,
           ...(idleTimeoutMinutes !== undefined ? { idleTimeoutMinutes } : {}),
         };
@@ -59,14 +59,19 @@ export class SessionStore {
   }
 
   /**
-   * Return the session id for this chat if it was created in the given cwd.
-   * Sessions recorded in a different cwd are stale — claude can't resume
-   * them from a different working directory.
+   * Return the session id for this chat if it was created in the given cwd
+   * AND by the current agent. Cross-agent resume will fail (Codex can't
+   * resume a Claude session), so we silently start fresh.
+   * Old sessions without an `agent` field are treated as stale when the
+   * current agent is known.
    */
-  resumeFor(chatId: string, cwd: string): string | undefined {
+  resumeFor(chatId: string, cwd: string, agent?: string): string | undefined {
     const entry = this.data[chatId];
     if (!entry) return undefined;
     if (entry.cwd !== cwd) return undefined;
+    // If the stored session was created by a different agent (or we don't
+    // know which agent created it but we know who we are), don't resume.
+    if (agent && entry.agent !== agent) return undefined;
     return entry.sessionId;
   }
 
@@ -74,13 +79,14 @@ export class SessionStore {
     return this.data[chatId];
   }
 
-  set(chatId: string, sessionId: string, cwd: string): void {
+  set(chatId: string, sessionId: string, cwd: string, agent?: string): void {
     // Preserve idleTimeoutMinutes across run starts — it's a per-scope
     // preference, not per-run-instance state. /new (clear) wipes it.
     const prev = this.data[chatId];
     this.data[chatId] = {
       sessionId,
       cwd,
+      ...(agent ? { agent } : {}),
       updatedAt: Date.now(),
       ...(prev?.idleTimeoutMinutes !== undefined
         ? { idleTimeoutMinutes: prev.idleTimeoutMinutes }
