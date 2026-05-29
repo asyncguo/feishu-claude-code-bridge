@@ -1,3 +1,5 @@
+import type { AgentId } from '../agent/types';
+
 export type TenantBrand = 'feishu' | 'lark';
 
 /**
@@ -108,8 +110,8 @@ export interface AppAccess {
 }
 
 export interface AppPreferences {
-  /** Agent backend: 'claude' (default) | 'codex'. */
-  agent?: 'claude' | 'codex';
+  /** Agent backend: 'claude' (default), 'codex', or 'pi'. */
+  agent?: AgentId;
   /** Reply rendering mode for IM (group/p2p) messages. Default 'card'. */
   messageReply?: MessageReplyMode;
   /**

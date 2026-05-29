@@ -8,6 +8,9 @@ export type AgentEvent =
   | { type: 'done'; sessionId?: string }
   | { type: 'error'; message: string };
 
+/** Known agent backends. Add new adapters here to keep types in sync. */
+export type AgentId = 'claude' | 'codex' | 'pi';
+
 export interface AgentRunOptions {
   prompt: string;
   cwd?: string;

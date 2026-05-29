@@ -30,9 +30,9 @@ program
   .command('run')
   .description('Run the bridge in the foreground (was `start` in older versions)')
   .option('-c, --config <path>', 'path to config file')
-  .option('--agent <agent>', 'agent backend: claude (default) or codex')
+  .option('--agent <agent>', 'agent backend: claude (default), codex, or pi')
   .option('--skip-check-lark-cli', 'skip lark-cli pre-flight check (auto-install + bind)')
-  .action(async (opts: { config?: string; agent?: 'claude' | 'codex'; skipCheckLarkCli?: boolean }) => {
+  .action(async (opts: { config?: string; agent?: import('../agent/types').AgentId; skipCheckLarkCli?: boolean }) => {
     await runStart(opts);
   });
 

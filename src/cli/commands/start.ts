@@ -4,7 +4,8 @@ import { createInterface } from 'node:readline';
 import pkg from '../../../package.json';
 import { ClaudeAdapter } from '../../agent/claude/adapter';
 import { CodexAdapter } from '../../agent/codex/adapter';
-import type { AgentAdapter } from '../../agent/types';
+import { PiAdapter } from '../../agent/pi/adapter';
+import type { AgentAdapter, AgentId } from '../../agent/types';
 import { startChannel, type BridgeChannel } from '../../bot/channel';
 import { runRegistrationWizard } from '../../bot/wizard';
 import type { Controls } from '../../commands';
@@ -58,8 +59,8 @@ const MEDIA_GC_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 export interface StartOptions {
   config?: string;
   skipCheckLarkCli?: boolean;
-  /** Agent backend: 'claude' (default) | 'codex'. Also settable via config preferences.agent. */
-  agent?: 'claude' | 'codex';
+  /** Agent backend: 'claude' (default), 'codex', or 'pi'. Also settable via config preferences.agent. */
+  agent?: AgentId;
 }
 
 export async function runStart(opts: StartOptions): Promise<void> {
@@ -94,7 +95,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
     hostname: os.hostname(),
   });
 
-  const agent = resolveAgent(opts.agent ?? (cfg.preferences?.agent as 'claude' | 'codex' | undefined));
+  const agent = resolveAgent(opts.agent ?? (cfg.preferences?.agent as AgentId | undefined));
   if (!(await agent.isAvailable())) {
     const label = agent.displayName;
     console.error(`✗ 未找到 ${agent.id} CLI。请先安装 ${label}。`);
@@ -255,10 +256,14 @@ export async function runStart(opts: StartOptions): Promise<void> {
   await new Promise<void>(() => {});
 }
 
-function resolveAgent(pref: 'claude' | 'codex' | undefined): AgentAdapter {
+function resolveAgent(pref: AgentId | undefined): AgentAdapter {
   if (pref === 'codex') {
     console.log('使用 Codex CLI 作为 agent 后端。');
     return new CodexAdapter();
+  }
+  if (pref === 'pi') {
+    console.log('使用 Pi Coding Agent 作为 agent 后端。');
+    return new PiAdapter();
   }
   return new ClaudeAdapter();
 }

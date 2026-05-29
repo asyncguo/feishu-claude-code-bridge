@@ -1,5 +1,6 @@
 import { ClaudeAdapter } from '../../agent/claude/adapter';
 import { CodexAdapter } from '../../agent/codex/adapter';
+import { PiAdapter } from '../../agent/pi/adapter';
 import type { AgentAdapter } from '../../agent/types';
 import { isComplete } from '../../config/schema';
 import { loadConfig } from '../../config/store';
@@ -140,9 +141,10 @@ async function reportConnectAfter(
 
   const entry = await waitForServiceConnect(appId, beforePids);
   if (entry) {
-    const agent = cfg.preferences?.agent === 'codex'
-      ? new CodexAdapter()
-      : new ClaudeAdapter();
+    const agent =
+      cfg.preferences?.agent === 'codex' ? new CodexAdapter() :
+      cfg.preferences?.agent === 'pi' ? new PiAdapter() :
+      new ClaudeAdapter();
     const verbZh = verb === 'started' ? '已启动' : '已重启';
     console.log(
       `✓ ${verbZh}  bot: ${entry.botName} (${entry.appId})  agent: ${agent.displayName} (${agent.id})  进程: ${entry.id}`,
