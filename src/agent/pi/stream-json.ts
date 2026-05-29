@@ -86,9 +86,9 @@ interface PiRawEvent {
  *     text_delta      → text
  *     toolcall_end    → tool_use (emitted once args are complete)
  *   turn_end:
- *     toolResults[]   → tool_result per entry
- *     message.usage   → usage
- *     (implicitly)    → done
+ *     + toolResults[]  → tool_result per entry, NO done (pi continues next turn)
+ *     − toolResults    → done (final turn, pi will exit)
+ *     (usage emitted in message_end, not duplicated here)
  *   agent_end      → (ignored)
  */
 export function* translateEvent(raw: unknown, sessionId?: string): Generator<AgentEvent> {
@@ -184,10 +184,11 @@ export function* translateEvent(raw: unknown, sessionId?: string): Generator<Age
 
     case 'turn_end': {
       const te = evt as unknown as PiTurnEndEvent;
+      const hasToolResults = te.toolResults && te.toolResults.length > 0;
 
       // Emit tool results from this turn. In pi, tool results are bundled
       // in turn_end, not streamed individually.
-      if (te.toolResults) {
+      if (hasToolResults) {
         for (const tr of te.toolResults) {
           const output = tr.content
             .map((c) => c.text ?? '')
@@ -201,20 +202,17 @@ export function* translateEvent(raw: unknown, sessionId?: string): Generator<Age
         }
       }
 
-      // Usage on the final message of the turn. We only emit if not
-      // already covered by a preceding message_end (the last turn_end
-      // carries the final response's usage).
-      const usage = te.message?.usage;
-      if (usage) {
-        yield {
-          type: 'usage',
-          inputTokens: usage.input,
-          outputTokens: usage.output,
-          costUsd: usage.cost?.total,
-        };
-      }
+      // Usage is already emitted in message_end (which always precedes
+      // turn_end and carries the same message.usage). Emitting again
+      // here would duplicate the usage event.
 
-      yield { type: 'done', sessionId };
+      // Only emit done on the FINAL turn (no tool results → pi will exit).
+      // When tool results are present, pi continues to the next turn
+      // automatically — emitting done here would break the event loop
+      // prematurely and abandon pi mid-conversation.
+      if (!hasToolResults) {
+        yield { type: 'done', sessionId };
+      }
       return;
     }
 

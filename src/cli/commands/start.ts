@@ -2,10 +2,8 @@ import dns from 'node:dns';
 import os from 'node:os';
 import { createInterface } from 'node:readline';
 import pkg from '../../../package.json';
-import { ClaudeAdapter } from '../../agent/claude/adapter';
-import { CodexAdapter } from '../../agent/codex/adapter';
-import { PiAdapter } from '../../agent/pi/adapter';
-import type { AgentAdapter, AgentId } from '../../agent/types';
+import { resolveAgent } from '../../agent';
+import type { AgentId } from '../../agent/types';
 import { startChannel, type BridgeChannel } from '../../bot/channel';
 import { runRegistrationWizard } from '../../bot/wizard';
 import type { Controls } from '../../commands';
@@ -95,14 +93,16 @@ export async function runStart(opts: StartOptions): Promise<void> {
     hostname: os.hostname(),
   });
 
-  const agent = resolveAgent(opts.agent ?? (cfg.preferences?.agent as AgentId | undefined));
+  const agent = pickAgent(opts.agent ?? (cfg.preferences?.agent as AgentId | undefined));
   if (!(await agent.isAvailable())) {
     const label = agent.displayName;
     console.error(`✗ 未找到 ${agent.id} CLI。请先安装 ${label}。`);
     if (agent.id === 'claude') {
       console.error('  https://docs.anthropic.com/en/docs/claude-code/quickstart');
-    } else {
+    } else if (agent.id === 'codex') {
       console.error('  https://github.com/openai/codex');
+    } else if (agent.id === 'pi') {
+      console.error('  https://github.com/earendil-works/pi#readme');
     }
     process.exit(1);
   }
@@ -256,16 +256,13 @@ export async function runStart(opts: StartOptions): Promise<void> {
   await new Promise<void>(() => {});
 }
 
-function resolveAgent(pref: AgentId | undefined): AgentAdapter {
+function pickAgent(pref: AgentId | undefined) {
   if (pref === 'codex') {
     console.log('使用 Codex CLI 作为 agent 后端。');
-    return new CodexAdapter();
-  }
-  if (pref === 'pi') {
+  } else if (pref === 'pi') {
     console.log('使用 Pi Coding Agent 作为 agent 后端。');
-    return new PiAdapter();
   }
-  return new ClaudeAdapter();
+  return resolveAgent(pref);
 }
 
 /**

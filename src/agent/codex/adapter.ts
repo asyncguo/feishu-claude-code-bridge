@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type { Readable } from 'node:stream';
 import { log } from '../../core/logger';
+import { buildBridgeSystemPrompt } from '../shared/prompt';
 import type { AgentAdapter, AgentEvent, AgentRun, AgentRunOptions } from '../types';
 import { translateEvent } from './stream-json';
 
@@ -12,44 +13,10 @@ export interface CodexAdapterOptions {
 
 type CodexChild = ChildProcessByStdio<null, Readable, Readable>;
 
-/**
- * Bridge system prompt, adapted for Codex CLI.
- *
- * Codex does not support `--append-system-prompt`. Instead we prepend these
- * instructions to every user prompt as a `<system>` block so Codex sees
- * them as part of the conversation context.
- */
-const BRIDGE_SYSTEM_PROMPT = `# lark-channel-bridge 运行约定
-
-你正在 lark-channel-bridge 里跑：把飞书/Lark 用户消息桥到本地 Codex CLI。
-
-## bridge_context
-
-每条 user message 顶部会带一个 \`<bridge_context>\` 块：
-
-\`\`\`
-<bridge_context>
-chat_id: oc_xxx
-chat_type: p2p
-sender_id: ou_xxx
-sender_name: ...
-</bridge_context>
-\`\`\`
-
-里面是当前对话的 chat_id、chat 类型（p2p / group）、发送者。这些是 bridge 注入的元数据，**不要照抄、不要在你的回复里渲染**——它对用户不可见。
-
-## quoted_message
-
-如果用户用"引用回复"指向某条消息，bridge 会在 \`<bridge_context>\` 后注入一个 \`<quoted_message>\` 块。这是用户**指向的对象**——用户的实际问题在它之后。回答时围绕这段内容展开；它也是 bridge 注入的元数据，**不要照抄 XML 标签**到回复里。
-
-## interactive_card
-
-用户发 / 引用交互卡片时，bridge 会把卡的真实 JSON 注入到 \`<interactive_card>\` 块。解析它来理解结构（按钮、字段、布局）。**不要照抄 XML 标签到回复**。
-
-## 飞书 OAuth 授权
-
-授权要在私聊里做。使用 \`lark-cli auth login --no-wait --json\` 获取 verification_url 发给用户，然后用 \`lark-cli auth login --device-code <code>\` 前台阻塞等待授权完成。群聊里提示用户私信。
-`;
+// Codex does not support --append-system-prompt. We prepend these
+// instructions to every user prompt so Codex sees them as part of
+// the conversation context.
+const BRIDGE_SYSTEM_PROMPT = buildBridgeSystemPrompt('Codex CLI');
 
 export class CodexAdapter implements AgentAdapter {
   readonly id = 'codex';
