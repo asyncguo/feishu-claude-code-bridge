@@ -13,7 +13,10 @@ export interface ClaudeAdapterOptions {
 
 type ClaudeChild = ChildProcessByStdio<null, Readable, Readable>;
 
-const BRIDGE_SYSTEM_PROMPT = buildBridgeSystemPrompt('\`claude\` CLI');
+const BRIDGE_SYSTEM_PROMPT = buildBridgeSystemPrompt({
+  runtimeName: '\`claude\` CLI',
+  selfName: 'Claude Code',
+});
 
 export class ClaudeAdapter implements AgentAdapter {
   readonly id = 'claude';

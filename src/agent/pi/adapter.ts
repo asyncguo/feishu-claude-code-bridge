@@ -13,7 +13,10 @@ export interface PiAdapterOptions {
 
 type PiChild = ChildProcessByStdio<null, Readable, Readable>;
 
-const BRIDGE_SYSTEM_PROMPT = buildBridgeSystemPrompt('pi CLI');
+const BRIDGE_SYSTEM_PROMPT = buildBridgeSystemPrompt({
+  runtimeName: 'pi CLI',
+  selfName: 'pi agent',
+});
 
 export class PiAdapter implements AgentAdapter {
   readonly id = 'pi';

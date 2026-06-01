@@ -16,7 +16,10 @@ type CodexChild = ChildProcessByStdio<null, Readable, Readable>;
 // Codex does not support --append-system-prompt. We prepend these
 // instructions to every user prompt so Codex sees them as part of
 // the conversation context.
-const BRIDGE_SYSTEM_PROMPT = buildBridgeSystemPrompt('Codex CLI');
+const BRIDGE_SYSTEM_PROMPT = buildBridgeSystemPrompt({
+  runtimeName: 'Codex CLI',
+  selfName: 'Codex CLI',
+});
 
 export class CodexAdapter implements AgentAdapter {
   readonly id = 'codex';
