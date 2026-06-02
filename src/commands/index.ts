@@ -582,9 +582,11 @@ function formatAgo(ms: number): string {
 async function handleAgent(args: string, ctx: CommandContext): Promise<void> {
   const target = args.trim().toLowerCase();
   const availableIds = ctx.agentStore.listIds();
-  const currentId = ctx.agentStore.getId(ctx.scope);
+  const preferredId = ctx.agentStore.getId(ctx.scope);
   const defaultAgent = ctx.agentStore.defaultAgent;
-  const effectiveId = currentId ?? defaultAgent.id;
+  // If preferred adapter is no longer available, effective falls back to default.
+  const effectiveAdapter = ctx.agentStore.resolve(ctx.scope);
+  const effectiveId = effectiveAdapter.id;
 
   if (availableIds.length === 0) {
     await reply(ctx, '❌ 当前没有可用的 agent 后端。先安装至少一个 CLI。');
@@ -594,9 +596,14 @@ async function handleAgent(args: string, ctx: CommandContext): Promise<void> {
   if (!target) {
     // Show current agent + available options
     const lines: string[] = [];
-    const currentLabel = currentId
-      ? `${ctx.agentStore.getById(effectiveId as AgentId)?.displayName ?? effectiveId} (\`${effectiveId}\`)`
-      : `${defaultAgent.displayName} (\`${defaultAgent.id}\`，全局默认)`;
+    let currentLabel: string;
+    if (preferredId && availableIds.includes(preferredId)) {
+      currentLabel = `${effectiveAdapter.displayName} (\`${effectiveId}\`)`;
+    } else if (preferredId && !availableIds.includes(preferredId)) {
+      currentLabel = `${defaultAgent.displayName} (\`${defaultAgent.id}\`，全局默认）⚠️ 偏好 \`${preferredId}\` 已不可用`;
+    } else {
+      currentLabel = `${defaultAgent.displayName} (\`${defaultAgent.id}\`，全局默认)`;
+    }
     lines.push(`🤖 当前 agent：**${currentLabel}**`);
     lines.push('');
     lines.push('可用 agent：');
@@ -620,7 +627,7 @@ async function handleAgent(args: string, ctx: CommandContext): Promise<void> {
       ctx.sessions.clear(ctx.scope);
       await reply(
         ctx,
-        `✅ 已恢复全局默认 agent（${defaultAgent.displayName}， \`${defaultAgent.id}\`）\n（session 已重置）`,
+        `✅ 已恢复全局默认 agent（${defaultAgent.displayName}，\`${defaultAgent.id}\`）\n（session 已重置，后续使用全局默认）`,
       );
     } else {
       await reply(ctx, `当前已经在用全局默认 agent（${defaultAgent.displayName}）。`);
@@ -647,7 +654,7 @@ async function handleAgent(args: string, ctx: CommandContext): Promise<void> {
   ctx.sessions.clear(ctx.scope);
   await reply(
     ctx,
-    `✅ 已切换到 **${adapter.displayName}**（\`${adapter.id}\`）\n（session 已重置）`,
+    `✅ 已切换到 **${adapter.displayName}**（\`${adapter.id}\`）\n（已保存，重启后仍生效）`,
   );
 }
 
@@ -1239,6 +1246,11 @@ async function showConfigForm(ctx: CommandContext): Promise<void> {
   const ms = getRunIdleTimeoutMs(ctx.controls.cfg);
   const access = ctx.controls.cfg.preferences?.access ?? {};
   const card = configFormCard({
+    agent: ctx.agentStore.defaultAgent.id as AgentId,
+    availableAgents: ctx.agentStore.listIds().map((id) => ({
+      id,
+      displayName: ctx.agentStore.getById(id)?.displayName ?? id,
+    })),
     messageReply: getMessageReplyMode(ctx.controls.cfg),
     showToolCalls: getShowToolCalls(ctx.controls.cfg),
     maxConcurrentRuns: getMaxConcurrentRuns(ctx.controls.cfg),
@@ -1290,6 +1302,12 @@ async function cancelConfig(ctx: CommandContext): Promise<void> {
 
 async function submitConfig(ctx: CommandContext): Promise<void> {
   const fv = ctx.formValue ?? {};
+  // Parse default_agent. Invalid/empty keeps current.
+  const rawAgent = String(fv.default_agent ?? '').trim();
+  const availableIds = ctx.agentStore.listIds();
+  const agent: AgentId = availableIds.includes(rawAgent as AgentId)
+    ? (rawAgent as AgentId)
+    : (ctx.agentStore.defaultAgent.id as AgentId);
   const rawReply = String(fv.message_reply ?? '').trim();
   const messageReply: MessageReplyMode =
     rawReply === 'markdown' || rawReply === 'text' || rawReply === 'card'
@@ -1356,6 +1374,7 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
     // runAgentBatch's reads, so this takes effect on the next message.
     ctx.controls.cfg.preferences = {
       ...(ctx.controls.cfg.preferences ?? {}),
+      agent,
       messageReply,
       // Mark the messageReply value as living in the new (post-0.1.27)
       // semantic — `text` now means real plain text, not the lightweight
@@ -1371,6 +1390,12 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       // so empty is meaningful, not a stand-in for "unrestricted".
       access: { allowedUsers, allowedChats, admins },
     };
+
+    // Update the runtime default agent if it changed.
+    const newDefault = ctx.agentStore.getById(agent);
+    if (newDefault && newDefault !== ctx.agentStore.defaultAgent) {
+      ctx.agentStore.setDefaultAgent(newDefault);
+    }
 
     try {
       await saveConfig(ctx.controls.cfg, configPath);
@@ -1397,6 +1422,11 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       ctx,
       formMsgId,
       configSavedCard({
+        agent,
+        availableAgents: ctx.agentStore.listIds().map((id) => ({
+          id,
+          displayName: ctx.agentStore.getById(id)?.displayName ?? id,
+        })),
         messageReply,
         showToolCalls,
         maxConcurrentRuns,

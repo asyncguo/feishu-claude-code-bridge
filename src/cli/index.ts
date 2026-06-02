@@ -55,8 +55,9 @@ program
 program
   .command('start')
   .description('Install (if needed) and start the bridge as an OS-managed daemon')
+  .option('--agent <agent>', 'agent backend: claude (default), codex, or pi')
   .option('--skip-check-lark-cli', 'skip lark-cli pre-flight check (auto-install + bind)')
-  .action(async (opts: { skipCheckLarkCli?: boolean }) => {
+  .action(async (opts: { agent?: import('../agent/types').AgentId; skipCheckLarkCli?: boolean }) => {
     await runServiceStart(opts);
   });
 

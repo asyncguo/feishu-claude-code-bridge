@@ -115,6 +115,7 @@ export async function runStart(opts: StartOptions): Promise<void> {
 
   const sessions = new SessionStore();
   await sessions.load();
+  agentStore.bindSessions(sessions);
   const workspaces = new WorkspaceStore();
   await workspaces.load();
 

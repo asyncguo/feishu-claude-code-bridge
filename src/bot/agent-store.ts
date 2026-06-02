@@ -1,4 +1,5 @@
 import type { AgentId, AgentAdapter } from '../agent/types';
+import type { SessionStore } from '../session/store';
 import { log } from '../core/logger';
 
 /**
@@ -6,62 +7,63 @@ import { log } from '../core/logger';
  * agent backend to use, overriding the global default set at startup or
  * via `config.preferences.agent`.
  *
- * Not persisted to disk — resets on restart. Lightweight enough to keep
- * all three adapter instances alive for the process lifetime.
+ * Per-scope preferences are persisted in sessions.json (via SessionStore)
+ * and survive restarts.
  */
 export class AgentStore {
-  /** scope → AgentId mapping. Undefined entries use the default agent. */
-  private scopeAgent = new Map<string, AgentId>();
-
   /** All available adapters, keyed by AgentId. */
   private adapters = new Map<AgentId, AgentAdapter>();
 
   /** The global default adapter (from startup config / CLI flag). */
   defaultAgent: AgentAdapter;
 
+  /** Session store for reading persisted per-scope agent preferences. */
+  private sessions: SessionStore | undefined;
+
   constructor(adapters: AgentAdapter[], defaultAgent: AgentAdapter) {
     this.defaultAgent = defaultAgent;
     this.replaceAdapters(adapters);
   }
 
-  /** Resolve the effective agent for a scope. Falls back to defaultAgent. */
+  /** Bind the session store so resolve() can read persisted preferences. */
+  bindSessions(sessions: SessionStore): void {
+    this.sessions = sessions;
+  }
+
+  /** Resolve the effective agent for a scope. Checks persisted preference
+   * in sessions.json, then falls back to defaultAgent. */
   resolve(scope: string): AgentAdapter {
-    const id = this.scopeAgent.get(scope);
-    if (id) {
-      const adapter = this.adapters.get(id);
+    const preferredId = this.sessions?.getPreferredAgent(scope);
+    if (preferredId) {
+      const adapter = this.adapters.get(preferredId);
       if (adapter) return adapter;
     }
     return this.defaultAgent;
   }
 
-  /** Get the raw AgentId for a scope (or undefined if using default). */
+  /** Get the persisted preferred AgentId for a scope (or undefined if using default). */
   getId(scope: string): AgentId | undefined {
-    return this.scopeAgent.get(scope);
+    return this.sessions?.getPreferredAgent(scope);
   }
 
-  /** Set agent preference for a scope. */
+  /** Set agent preference for a scope (persisted via SessionStore). */
   set(scope: string, agentId: AgentId): void {
-    const prev = this.scopeAgent.get(scope);
-    this.scopeAgent.set(scope, agentId);
-    log.info('agent-store', 'set', { scope, agentId, previous: prev });
+    if (!this.sessions) return;
+    this.sessions.setPreferredAgent(scope, agentId);
+    log.info('agent-store', 'set', { scope, agentId });
   }
 
   /** Clear per-scope preference (revert to default). */
   clear(scope: string): boolean {
-    const had = this.scopeAgent.delete(scope);
-    if (had) log.info('agent-store', 'clear', { scope });
-    return had;
+    if (!this.sessions) return false;
+    const cleared = this.sessions.clearPreferredAgent(scope);
+    if (cleared) log.info('agent-store', 'clear', { scope });
+    return cleared;
   }
 
-  /** Replace the available adapter set, pruning dead per-scope preferences. */
+  /** Replace the available adapter set. */
   replaceAdapters(adapters: AgentAdapter[]): void {
     this.adapters = new Map(adapters.map((a) => [a.id as AgentId, a]));
-    for (const [scope, agentId] of this.scopeAgent.entries()) {
-      if (!this.adapters.has(agentId)) {
-        this.scopeAgent.delete(scope);
-        log.info('agent-store', 'prune', { scope, agentId });
-      }
-    }
   }
 
   /** Update the global default agent used when a scope has no override. */

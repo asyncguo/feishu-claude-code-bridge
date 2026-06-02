@@ -1,7 +1,12 @@
 import type { KnownChat } from '../bot/lark-info';
+import type { AgentId } from '../agent/types';
 import type { MessageReplyMode } from '../config/schema';
 
 export interface ConfigFormOpts {
+  /** Current global default agent. */
+  agent: AgentId;
+  /** All available agent ids for the dropdown. */
+  availableAgents: { id: AgentId; displayName: string }[];
   messageReply: MessageReplyMode;
   showToolCalls: boolean;
   maxConcurrentRuns: number;
@@ -119,6 +124,21 @@ export function configFormCard(opts: ConfigFormOpts): object {
           tag: 'form',
           name: 'config_form',
           elements: [
+            {
+              tag: 'markdown',
+              content:
+                '**默认 Agent**\n' +
+                '_全局默认的 agent 后端。各会话可通过 `/agent` 单独覆盖_',
+            },
+            {
+              tag: 'select_static',
+              name: 'default_agent',
+              initial_option: opts.agent,
+              options: opts.availableAgents.map((a) => ({
+                text: { tag: 'plain_text', content: a.displayName },
+                value: a.id,
+              })),
+            },
             {
               tag: 'markdown',
               content:
@@ -246,6 +266,8 @@ export function configSavedCard(opts: ConfigFormOpts): object {
       : opts.messageReply === 'markdown'
         ? '消息卡片'
         : '纯文本';
+  const agentLabel =
+    opts.availableAgents.find((a) => a.id === opts.agent)?.displayName ?? opts.agent;
   const summarize = (list: string[]): string =>
     list.length === 0 ? '_(空)_' : `${list.length} 项`;
   return {
@@ -257,6 +279,7 @@ export function configSavedCard(opts: ConfigFormOpts): object {
           tag: 'markdown',
           content:
             '✅ **偏好已保存**\n\n' +
+            `**默认 Agent**：${agentLabel}\n` +
             `**消息回复方式**：${replyLabel}\n` +
             `**工具调用显示**：\`${opts.showToolCalls ? 'show' : 'hide'}\`\n` +
             `**并发上限**：\`${opts.maxConcurrentRuns}\`\n` +

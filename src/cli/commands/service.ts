@@ -1,6 +1,7 @@
 import { resolveAgent } from '../../agent';
-import { isComplete } from '../../config/schema';
-import { loadConfig } from '../../config/store';
+import type { AgentId } from '../../agent/types';
+import { type AppConfig, isComplete } from '../../config/schema';
+import { loadConfig, saveConfig } from '../../config/store';
 import { daemonStderrPath, daemonStdoutPath } from '../../daemon/paths';
 import {
   getServiceAdapter,
@@ -11,6 +12,8 @@ import { readAndPrune, type ProcessEntry } from '../../runtime/registry';
 import { preFlightChecks } from '../preflight';
 
 export interface ServiceStartOptions {
+  /** Agent backend override. Persisted to config so the daemon picks it up. */
+  agent?: AgentId;
   /** Skip lark-cli auto-install + bind during `start`. */
   skipCheckLarkCli?: boolean;
 }
@@ -160,6 +163,25 @@ async function reportConnectAfter(
 export async function runServiceStart(opts: ServiceStartOptions = {}): Promise<void> {
   const adapter = requireAdapter('start');
   await ensureBridgeConfigured();
+
+  // Validate and persist --agent to config so the daemon picks it up at startup.
+  if (opts.agent) {
+    const validIds: AgentId[] = ['claude', 'codex', 'pi'];
+    if (!validIds.includes(opts.agent)) {
+      console.error(`✗ 不支持的 agent：${opts.agent}。可用：${validIds.join('、')}`);
+      process.exit(1);
+    }
+    const resolved = resolveAgent(opts.agent);
+    if (!(await resolved.isAvailable())) {
+      console.error(`✗ ${resolved.displayName} CLI 未安装，不写入 config。`);
+      console.error(`  请先安装后再 start --agent ${opts.agent}。`);
+      process.exit(1);
+    }
+    const cfg = await loadConfig();
+    cfg.preferences = { ...(cfg.preferences ?? {}), agent: opts.agent };
+    await saveConfig(cfg as AppConfig);
+  }
+
   // Run the same lark-cli check as `bridge run` BEFORE writing the
   // service file — the user is in a TTY here and can answer the install
   // prompt. The daemon's own preflight (when launchd / systemd spawns

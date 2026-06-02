@@ -26,3 +26,54 @@ describe('SessionStore.resumeFor', () => {
     expect(store.resumeFor('scope-1', '/tmp/other', 'codex')).toBeUndefined();
   });
 });
+
+describe('SessionStore.preferredAgent', () => {
+  it('set/get/clear preferred agent', async () => {
+    const store = await makeStore();
+
+    expect(store.getPreferredAgent('chat-1')).toBeUndefined();
+
+    store.setPreferredAgent('chat-1', 'codex');
+    expect(store.getPreferredAgent('chat-1')).toBe('codex');
+
+    store.clearPreferredAgent('chat-1');
+    await store.flush();
+    expect(store.getPreferredAgent('chat-1')).toBeUndefined();
+  });
+
+  it('clear() preserves preferredAgent', async () => {
+    const store = await makeStore();
+    store.set('chat-1', 'session-1', '/tmp', 'codex');
+    store.setPreferredAgent('chat-1', 'codex');
+
+    store.clear('chat-1');
+    await store.flush();
+    expect(store.getPreferredAgent('chat-1')).toBe('codex');
+    expect(store.resumeFor('chat-1', '/tmp', 'codex')).toBeUndefined();
+  });
+
+  it('setPreferredAgent clears old sessionId', async () => {
+    const store = await makeStore();
+    store.set('chat-1', 'session-1', '/tmp', 'claude');
+
+    store.setPreferredAgent('chat-1', 'codex');
+    await store.flush();
+    expect(store.resumeFor('chat-1', '/tmp', 'claude')).toBeUndefined();
+    expect(store.resumeFor('chat-1', '/tmp', 'codex')).toBeUndefined();
+    expect(store.getPreferredAgent('chat-1')).toBe('codex');
+  });
+
+  it('persists and reloads preferredAgent', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'lark-channel-bridge-session-'));
+    tempDirs.push(dir);
+    const path = join(dir, 'sessions.json');
+
+    const store1 = new SessionStore(path);
+    store1.setPreferredAgent('chat-1', 'pi');
+    await store1.flush();
+
+    const store2 = new SessionStore(path);
+    await store2.load();
+    expect(store2.getPreferredAgent('chat-1')).toBe('pi');
+  });
+});

@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { paths } from '../config/paths';
 import { log } from '../core/logger';
+import type { AgentId } from '../agent/types';
 
 export interface SessionEntry {
   /** May be absent if the entry was created by /timeout before any run
@@ -17,6 +18,9 @@ export interface SessionEntry {
    * scope, undefined = follow global default. /new clears the whole entry,
    * so this resets to "follow global" when the user starts a new session. */
   idleTimeoutMinutes?: number;
+  /** User's explicit agent preference for this scope, set via /agent.
+   * Persists across restarts and /new. undefined = follow global default. */
+  preferredAgent?: AgentId;
 }
 
 type SessionMap = Record<string, SessionEntry>;
@@ -42,14 +46,18 @@ export class SessionStore {
         const agent = typeof entry.agent === 'string' ? entry.agent : undefined;
         const idleTimeoutMinutes =
           typeof entry.idleTimeoutMinutes === 'number' ? entry.idleTimeoutMinutes : undefined;
+        const preferredAgent =
+          typeof entry.preferredAgent === 'string' ? (entry.preferredAgent as AgentId) : undefined;
         const hasSession = sessionId !== undefined && cwd !== undefined;
-        if (!hasSession && idleTimeoutMinutes === undefined) continue;
+        if (!hasSession && idleTimeoutMinutes === undefined && preferredAgent === undefined)
+          continue;
         this.data[chatId] = {
           ...(sessionId !== undefined ? { sessionId } : {}),
           ...(cwd !== undefined ? { cwd } : {}),
           ...(agent !== undefined ? { agent } : {}),
           updatedAt: entry.updatedAt,
           ...(idleTimeoutMinutes !== undefined ? { idleTimeoutMinutes } : {}),
+          ...(preferredAgent !== undefined ? { preferredAgent } : {}),
         };
       }
     } catch (err) {
@@ -80,8 +88,8 @@ export class SessionStore {
   }
 
   set(chatId: string, sessionId: string, cwd: string, agent?: string): void {
-    // Preserve idleTimeoutMinutes across run starts — it's a per-scope
-    // preference, not per-run-instance state. /new (clear) wipes it.
+    // Preserve idleTimeoutMinutes and preferredAgent across run starts —
+    // they are per-scope preferences, not per-run-instance state.
     const prev = this.data[chatId];
     this.data[chatId] = {
       sessionId,
@@ -91,13 +99,22 @@ export class SessionStore {
       ...(prev?.idleTimeoutMinutes !== undefined
         ? { idleTimeoutMinutes: prev.idleTimeoutMinutes }
         : {}),
+      ...(prev?.preferredAgent !== undefined
+        ? { preferredAgent: prev.preferredAgent }
+        : {}),
     };
     this.schedulePersist();
   }
 
   clear(chatId: string): void {
-    if (!(chatId in this.data)) return;
-    delete this.data[chatId];
+    const prev = this.data[chatId];
+    if (!prev) return;
+    // Preserve preferredAgent across /new — it's a user preference, not session state.
+    if (prev.preferredAgent !== undefined) {
+      this.data[chatId] = { preferredAgent: prev.preferredAgent, updatedAt: Date.now() };
+    } else {
+      delete this.data[chatId];
+    }
     this.schedulePersist();
   }
 
@@ -124,6 +141,40 @@ export class SessionStore {
     if (!prev || prev.idleTimeoutMinutes === undefined) return false;
     const { idleTimeoutMinutes: _, ...rest } = prev;
     this.data[chatId] = { ...rest, updatedAt: Date.now() };
+    this.schedulePersist();
+    return true;
+  }
+
+  /** Get the user's preferred agent for this scope (set via /agent). */
+  getPreferredAgent(chatId: string): AgentId | undefined {
+    return this.data[chatId]?.preferredAgent;
+  }
+
+  /** Set the user's preferred agent for this scope. Clears the existing
+   * sessionId since cross-agent resume is not possible. */
+  setPreferredAgent(chatId: string, agentId: AgentId): void {
+    const prev = this.data[chatId];
+    this.data[chatId] = {
+      ...(prev?.idleTimeoutMinutes !== undefined
+        ? { idleTimeoutMinutes: prev.idleTimeoutMinutes }
+        : {}),
+      preferredAgent: agentId,
+      updatedAt: Date.now(),
+    };
+    this.schedulePersist();
+  }
+
+  /** Clear the preferred agent for this scope (revert to global default). */
+  clearPreferredAgent(chatId: string): boolean {
+    const prev = this.data[chatId];
+    if (!prev || prev.preferredAgent === undefined) return false;
+    const { preferredAgent: _, ...rest } = prev;
+    if (Object.keys(rest).length <= 1) {
+      // Only updatedAt left — remove the entry entirely
+      delete this.data[chatId];
+    } else {
+      this.data[chatId] = { ...rest, updatedAt: Date.now() };
+    }
     this.schedulePersist();
     return true;
   }
