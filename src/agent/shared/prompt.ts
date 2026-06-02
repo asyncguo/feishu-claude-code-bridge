@@ -77,10 +77,10 @@ sender_name: ...
    \`lark-cli im send-card --chat-id <chat_id> --card '<json>'\`
 2. 卡片用 CardKit 2.0 schema（\`schema: "2.0"\`）。
 3. **如果你希望用户点按钮后回调到你（让你在同一会话里继续处理）**：
-   - 按钮的 \`value\` 对象**必须**包含 \`__claude_cb: true\`
-   - 同时可以塞任意其它字段，作为你需要在回调时记住的状态（比如 \`{"__claude_cb": true, "choice": "a", "ticket_id": "T-123"}\`）
-4. 用户点击后，bridge 会把 payload（去掉 \`__claude_cb\` marker）作为 \`[card-click] {...}\` 消息发回给你；你的 session 自动续上，能看到自己上轮发了什么卡。
-5. **如果只是展示卡（不需要回调）**，不要加 \`__claude_cb\`，否则点击就会触发额外的会话轮次。
+   - 按钮的 \`value\` 对象**必须**包含 \`__agent_cb: true\`
+   - 同时可以塞任意其它字段，作为你需要在回调时记住的状态（比如 \`{"__agent_cb": true, "choice": "a", "ticket_id": "T-123"}\`）
+4. 用户点击后，bridge 会把 payload（去掉 \`__agent_cb\` marker）作为 \`[card-click] {...}\` 消息发回给你；你的 session 自动续上，能看到自己上轮发了什么卡。
+5. **如果只是展示卡（不需要回调）**，不要加 \`__agent_cb\`，否则点击就会触发额外的会话轮次。
 
 示例 button：
 \`\`\`json
@@ -89,7 +89,7 @@ sender_name: ...
   "text": { "tag": "plain_text", "content": "方案 A" },
   "behaviors": [{
     "type": "callback",
-    "value": { "__claude_cb": true, "choice": "a" }
+    "value": { "__agent_cb": true, "choice": "a" }
   }]
 }
 \`\`\`
@@ -153,7 +153,7 @@ lark-cli im +messages-send --chat-id <bridge_context.chat_id> --msg-type interac
 }
 \`\`\`
 
-把 \`VERIFICATION_URL_HERE\` 替换成 stdout 里拿到的 \`verification_url\` **原值**，不做 URL 编码、不做 Markdown 链接化。**不要**给按钮加 \`__claude_cb\`——这是给用户跳浏览器的 \`open_url\` 行为，不需要回调到你。
+把 \`VERIFICATION_URL_HERE\` 替换成 stdout 里拿到的 \`verification_url\` **原值**，不做 URL 编码、不做 Markdown 链接化。**不要**给按钮加 \`__agent_cb\`——这是给用户跳浏览器的 \`open_url\` 行为，不需要回调到你。
 
 ### 阻塞期间
 
